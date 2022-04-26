@@ -27,11 +27,15 @@ public class DeathCountMapper extends Mapper<Object, Text, Text, IntWritable> {
         int week = Integer.parseInt(lineSplit[5]);
         int deaths = Integer.parseInt(lineSplit[7]);
 
+        if(state.equals("YC")){
+            state = "NY";
+        }
 
-        // Do I need to filter by year?
         if(year == 2016){
-            String stateWeek = state + "," + week;
-            context.write(new Text(stateWeek), new IntWritable(deaths));
+            if(!state.equals("PR")){
+                String stateWeek = state + "," + week;
+                context.write(new Text(stateWeek), new IntWritable(deaths));
+            }
         }
     }
 }
