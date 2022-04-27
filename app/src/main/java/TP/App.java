@@ -13,7 +13,6 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.eclipse.jetty.util.ArrayUtil;
 
 public class App {
   public static class CustomReducer
@@ -122,7 +121,6 @@ public class App {
       }
       String date=fields[0].substring(0, 9);
       String monthS = date.substring(2, 5);
-      System.out.println(monthS);
       int month=Arrays.asList(months).indexOf(monthS);
       int day = Integer.parseInt(date.substring(0,2));
         // Add the days in the previous months
@@ -131,7 +129,6 @@ public class App {
         day = day + days[month - 1];
         month--;
       }
-      System.out.println(day);
       day-=2;
       if(day>0){
         int week = (int) Math.floor(day/7);
