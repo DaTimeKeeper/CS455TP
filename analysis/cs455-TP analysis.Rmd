@@ -1,0 +1,305 @@
+---
+title: "cs455-TP analysis"
+author: "Team 16: Zach Walsh, Erik West, Trevor Isaacson"
+date: "4/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(455)
+library(dplyr)
+library(tidyverse)
+library(Metrics)
+library(GGally)
+library(tree)
+library(randomForest)
+library(gbm)
+library(ggplot2)
+```
+
+## Data Preview
+```{r echo = FALSE}
+final = read.csv("final.csv")
+colnames(final) = c("State", "Week", "Pollution", "Deaths", "Powerplants", "TransmissionLines")
+head(final)
+```
+
+Goal is to see if powerplants and transmission lines led to increased pollution in a state.  
+If there is increased pollution, does it lead to more deaths in the state?
+
+## Variable Analysis
+```{r warning = FALSE, message=FALSE}
+final %>% 
+  group_by(State) %>%
+  summarise(AvgPollution = sum(Pollution) / n()) %>%
+  arrange(State) %>%
+  ggplot() +
+    geom_point(aes(x = State, y = AvgPollution)) +
+    theme(text = element_text(size=10), axis.text.x = element_text(angle=90, hjust=1)) +
+    ggtitle("Average Pollution Rating per State")
+
+final %>%
+  group_by(State) %>%
+  summarise(Total = sum(Powerplants) / n()) %>%
+  arrange(State) %>%
+  ggplot() +
+    geom_point(aes(x = State, y = Total)) +
+    theme(text = element_text(size=10), axis.text.x = element_text(angle=90, hjust=1)) +
+    ggtitle("Powerplants per State")
+
+ggcorr(final)
+
+summary(final)
+```
+
+## Split into Training / Testing:
+```{r}
+trn = sample(seq_len(nrow(final)), nrow(final)*0.75)
+training = final[trn, ]
+testing = final[-trn, ]
+```
+
+## Train and Test Various Regression and ML models to determine correlation of pollution with other variables
+Multiple Linear Regression to determine if pollution is caused by powerplants and electrical lines
+```{r}
+linreg_PT = lm(Pollution ~ Powerplants + TransmissionLines, data = training)
+summary(linreg_PT)
+linreg_PT_predict = predict(linreg_PT, newdata = testing, type = "response")
+RMSE_linreg_PT = sqrt(mean((testing$Pollution - linreg_PT_predict)^2))
+print(paste("RMSE of linreg_PT on Testing Set: ", round(RMSE_linreg_PT, 4)))
+```
+
+Multiple Linear Regression to determine if pollution is caused by powerplants, electrical lines and state
+```{r warning = FALSE}
+linreg_PTS = lm(Pollution ~ Powerplants + TransmissionLines + State, data = training)
+summary(linreg_PTS)
+linreg_PTS_predict = predict(linreg_PTS, newdata = testing, type = "response")
+RMSE_linreg_PTS = rmse(testing$Pollution, linreg_PTS_predict)
+print(paste("RMSE of linreg_PTS on Testing Set: ", round(RMSE_linreg_PTS, 4)))
+```
+
+Multiple Linear Regression to determine if pollution is caused by powerplants, electrical lines, state, week
+```{r warning = FALSE}
+linreg_PTSW = lm(Pollution ~ Powerplants + TransmissionLines + State + Week, data = training)
+summary(linreg_PTSW)
+linreg_PTSW_predict = predict(linreg_PTSW, newdata = testing, type = "response")
+RMSE_linreg_PTSW = rmse(testing$Pollution, linreg_PTSW_predict)
+print(paste("RMSE of linreg_PTSW on Testing Set: ", round(RMSE_linreg_PTSW, 4)))
+```
+
+Fit Pollution Tree with Powerplants, Electrical Lines and Week
+```{r} 
+# fit regression tree
+tree_PTW = tree(Pollution ~ Powerplants + TransmissionLines + Week, data = training)
+
+tree_PTW_predict = predict(tree_PTW, newdata = testing)
+RMSE_tree_PTW = rmse(testing$Pollution, tree_PTW_predict)
+print(paste("Test RMSE of Tree_PTS: ", round(RMSE_tree_PTW, 4)))
+
+# cross validation
+tree_PTW_cv = cv.tree(tree_PTW)
+ggplot() +
+  geom_point(aes(x = tree_PTW_cv$size, y = tree_PTW_cv$dev)) + 
+  geom_line(aes(x = tree_PTW_cv$size, y = tree_PTW_cv$dev)) + 
+  ylab("CV Error Rate") + xlab("Size") + ggtitle("CV Classification Error Rate")
+
+# pruned by CV
+prune_tree_PTW <- prune.tree(tree_PTW, best = 7)
+plot(tree_PTW)
+text(tree_PTW, cex = 0.65, digits = 4, pretty = 0)
+title("Powerplants, Lines and Week")
+```
+
+Random Forest for Pollution on All Variables
+```{r}
+bag_pollution <- randomForest(Pollution ~ State + Week + TransmissionLines + Powerplants, data = training, importance = TRUE)
+
+bag_pollution_predict = predict(bag_pollution, testing, type = "response")
+bag_pollution_RMSE = rmse(testing$Pollution, bag_pollution_predict)
+print(paste("Test RMSE of bag_pollution: ", round(bag_pollution_RMSE, 4)))
+
+ggplot() + 
+  geom_point(aes(x = bag_pollution_predict, y = testing$Pollution), alpha = 0.25) + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ggtitle("Performance of bag_pollution on Test Set")
+
+data.frame(bag_pollution$importance) %>%
+  mutate(variable = rownames(bag_pollution$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(X.IncMSE)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("% Decreasing MSE") + 
+  geom_point(aes(X.IncMSE, variable))  
+
+data.frame(bag_pollution$importance) %>%
+  mutate(variable = rownames(bag_pollution$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(IncNodePurity)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("Node Purity") + 
+  geom_point(aes(IncNodePurity, variable))  
+```
+Boosting for Pollution with All Variables
+```{r}
+lambdas = seq(0, 5, length.out = 100)
+trainErrors = rep(NA, length(lambdas))
+testErrors = rep(NA, length(lambdas))
+for(i in 1:length(lambdas)){
+  boost = gbm(Pollution ~ State + Week + Powerplants + TransmissionLines, data = training, n.trees = 100, shrinkage = lambdas[i], distribution = "gaussian")
+  trainPred = predict(boost, training, n.trees = 100)
+  testPred = predict(boost, testing, n.trees = 100)
+  trainErrors[i] = mean((training$Pollution - trainPred)^2)
+  testErrors[i] = mean((testing$Pollution - testPred)^2)
+}
+
+boostedPollution = gbm(Pollution ~ State + Week + Powerplants + TransmissionLines, data = training, n.trees = 500, shrinkage = lambdas[which.min(testErrors)], distribution = "gaussian")
+summary(boostedPollution)
+
+boostedPollution_pred = predict(boostedPollution, testing)
+boostedPollution_RMSE = round(sqrt(mean((testing$Pollution - boostedPollution_pred)^2)), 4)
+print(paste("Testing MSE for Boosted Pollution Model:", boostedPollution_RMSE))
+```
+
+
+## Train and Test Various Regression and ML models to determine correlation of state deaths with other variables
+Multiple Linear Regression for Death with All Variables
+```{r warning = FALSE}
+linreg_DA = lm(Deaths ~ ., data = training)
+summary(linreg_DA)
+linreg_DA_predict = predict(linreg_DA, newdata = testing, type = "response")
+RMSE_linreg_DA = sqrt(mean((testing$Deaths - linreg_DA_predict)^2))
+print(paste("RMSE of linreg_PT Testing Set: ", round(RMSE_linreg_DA, 4)))
+```
+
+
+Random Forest for Deaths on All Variables
+```{r}
+bag_deaths <- randomForest(Deaths ~ ., data = training, importance = TRUE)
+
+bag_deaths_predict = predict(bag_deaths, testing, type = "response")
+bag_deaths_RMSE = rmse(testing$Deaths, bag_deaths_predict)
+print(paste("Test RMSE of bag_pollution: ", round(bag_deaths_RMSE, 4)))
+
+ggplot() + 
+  geom_point(aes(x = bag_deaths_predict, y = testing$Deaths), alpha = 0.25) + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ggtitle("Performance of Bagging on Testing Set")
+
+data.frame(bag_deaths$importance) %>%
+  mutate(variable = rownames(bag_deaths$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(X.IncMSE)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("% Decreasing MSE") + 
+  geom_point(aes(X.IncMSE, variable))  
+
+data.frame(bag_deaths$importance) %>%
+  mutate(variable = rownames(bag_deaths$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(IncNodePurity)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("Node Purity") + 
+  geom_point(aes(IncNodePurity, variable))  
+```
+
+Random Forest for Deaths on All Variables Except State
+```{r}
+bag_DES <- randomForest(Deaths ~ Week + TransmissionLines + Powerplants + Pollution, data = training, importance = TRUE)
+
+bag_DES_predict = predict(bag_DES, testing, type = "response")
+bag_DES_RMSE = rmse(testing$Deaths, bag_DES_predict)
+print(paste("Test RMSE of bag_deaths without states: ", round(bag_DES_RMSE, 4)))
+
+ggplot() + 
+  geom_point(aes(x = bag_DES_predict, y = testing$Deaths), alpha = 0.25) + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ggtitle("Performance of Bagging on Test Set")
+
+data.frame(bag_DES$importance) %>%
+  mutate(variable = rownames(bag_DES$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(X.IncMSE)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("% Decreasing MSE") + 
+  geom_point(aes(X.IncMSE, variable))  
+
+data.frame(bag_DES$importance) %>%
+  mutate(variable = rownames(bag_DES$importance)) %>%
+  mutate(variable = factor(variable, levels = variable[order(IncNodePurity)])) %>%
+  ggplot() + ggtitle("Predictive Power") + xlab("Node Purity") + 
+  geom_point(aes(IncNodePurity, variable))  
+```
+
+Boosting for Death with All Variables
+```{r}
+lambdas = seq(0, 5, length.out = 100)
+trainErrors = rep(NA, length(lambdas))
+testErrors = rep(NA, length(lambdas))
+for(i in 1:length(lambdas)){
+  boost = gbm(Deaths ~ ., data = training, n.trees = 100, shrinkage = lambdas[i], distribution = "gaussian")
+  trainPred = predict(boost, training, n.trees = 100)
+  testPred = predict(boost, testing, n.trees = 100)
+  trainErrors[i] = mean((training$Deaths - trainPred)^2)
+  testErrors[i] = mean((testing$Deaths - testPred)^2)
+}
+
+boosted = gbm(Deaths ~ ., data = training, n.trees = 500, shrinkage = lambdas[which.min(testErrors)], distribution = "gaussian")
+summary(boosted)
+
+boosted_pred = predict(boosted, testing)
+boosted_RMSE = round(sqrt(mean((testing$Deaths - boosted_pred)^2)), 4)
+print(paste("Testing MSE for Boosted Model:", boosted_RMSE))
+```
+
+
+```{r}
+ggplot() + 
+  geom_point(aes(x = boosted_pred, y = testing$Deaths), alpha = 0.25) + 
+  geom_abline(slope = 1, intercept = 0) + 
+  ggtitle("Performance of Boosting Deaths on Test Set")
+
+```
+
+
+## RMSE Pollution Table
+```{r}
+method = c("Linear Regression Pollution (PP + TL)", "Linear Regression Pollution (PP + TL + St)", "Linear Regression Pollution (All)", "Trees (No State)", 
+           "Bagging Pollution RMSE (All)", "Boosting Pollution RMSE (All)")
+RMSEpollution = c(RMSE_linreg_PT, RMSE_linreg_PTS, RMSE_linreg_PTSW, RMSE_tree_PTW, bag_pollution_RMSE, boostedPollution_RMSE)
+maxPollution = max(final$Pollution)
+minPollution = min(final$Pollution)
+normRMSEPollution = c(RMSE_linreg_PT/(maxPollution-minPollution), RMSE_linreg_PTS/(maxPollution-minPollution), RMSE_linreg_PTSW/(maxPollution-minPollution), RMSE_tree_PTW/(maxPollution-minPollution), bag_pollution_RMSE/(maxPollution-minPollution), boostedPollution_RMSE/(maxPollution-minPollution))
+
+finalRMSEpollution = data.frame(Methods = method, RMSE = round(RMSEpollution,4), NormRMSE = round(normRMSEPollution, 4))
+finalRMSEpollution
+```
+
+## RMSE Death Table
+Normalizing RMSE scores gives us a better understanding of how "good" our model does at predicting
+Values are 0 to 1
+Closer to 0 represents a better number
+```{r}
+method = c("Linear Regression Deaths (All)", "Bagging Deaths (All)", "Bagging Deaths (No States)", "Boosting Death (All)")
+RMSEdeaths = c(RMSE_linreg_DA, bag_deaths_RMSE, bag_DES_RMSE, boosted_RMSE)
+maxDeaths = max(final$Deaths)
+minDeaths = min(final$Deaths)
+normRMSEDeaths = c(RMSE_linreg_DA/(maxDeaths-minDeaths), bag_deaths_RMSE/(maxDeaths-minDeaths), bag_DES_RMSE/(maxDeaths-minDeaths), boosted_RMSE/(maxDeaths-minDeaths))
+
+finalRMSEdeaths = data.frame(Methods = method, RMSE = round(RMSEdeaths, 4), NormRMSE = round(normRMSEDeaths,4))
+finalRMSEdeaths
+```
+
+
+## Final Model: Does higher pollution correlate to more deaths?
+```{r message = FALSE}
+lambdas = seq(0, 5, length.out = 100)
+trainErrors = rep(NA, length(lambdas))
+testErrors = rep(NA, length(lambdas))
+for(i in 1:length(lambdas)){
+  boost = gbm(Deaths ~ Pollution, data = training, n.trees = 100, shrinkage = lambdas[i], distribution = "gaussian")
+  trainPred = predict(boost, training, n.trees = 100)
+  testPred = predict(boost, testing, n.trees = 100)
+  trainErrors[i] = mean((training$Deaths - trainPred)^2)
+  testErrors[i] = mean((testing$Deaths - testPred)^2)
+}
+
+finalBoosted = gbm(Deaths ~ Pollution, data = training, n.trees = 500, shrinkage = lambdas[which.min(testErrors)], distribution = "gaussian")
+
+finalBoosted_pred = predict(finalBoosted, testing)
+finalBoosted_RMSE = round(sqrt(mean((testing$Deaths - finalBoosted_pred)^2)), 4)
+print(paste("Testing MSE for Boosted Model on Test Set:", finalBoosted_RMSE))
+```
+
+
+
