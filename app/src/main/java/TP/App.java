@@ -131,7 +131,7 @@ public class App {
       }
       day-=2;
       if(day>0){
-        int week = (int) Math.floor(day/7);
+        int week = (int) Math.floor((day-1)/7);
         DoubleWritable pmConcentrate = new DoubleWritable(Double.parseDouble(fields[1]));
         Text stateDate= new Text(""+states.get((Integer.parseInt(fields[0].substring(10)))-1)+":"+week);
         context.write(stateDate, pmConcentrate);
