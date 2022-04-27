@@ -169,7 +169,7 @@ public class App {
     }
   }
 
-  public class DeathCountMapper extends Mapper<Object, Text, Text, IntWritable> {
+  public static class DeathCountMapper extends Mapper<Object, Text, Text, IntWritable> {
 
     @Override
     public void map(Object key, Text value, Context context) throws IOException, InterruptedException{
@@ -193,7 +193,7 @@ public class App {
     }
   }
 
-  public class DeathCountReducer extends Reducer<Text, IntWritable, Text, DoubleWritable> {
+  public static class DeathCountReducer extends Reducer<Text, IntWritable, Text, DoubleWritable> {
     @Override
     public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException{
         // since there are many different causes of death, need to sum them up for each week
