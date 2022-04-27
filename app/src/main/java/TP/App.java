@@ -7,6 +7,7 @@ import java.util.StringTokenizer;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.DoubleWritable;
+import org.apache.hadoop.io.IntWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -168,6 +169,42 @@ public class App {
     }
   }
 
+  public static class DeathCountMapper extends Mapper<Object, Text, Text, IntWritable> {
+
+    @Override
+    public void map(Object key, Text value, Context context) throws IOException, InterruptedException{
+        String input = value.toString();
+        String[] lineSplit = input.split(",");
+        String state = lineSplit[3];
+        int year = Integer.parseInt(lineSplit[4]);
+        int week = Integer.parseInt(lineSplit[5]);
+        int deaths = Integer.parseInt(lineSplit[7]);
+
+        if(state.equals("YC")){
+            state = "NY";
+        }
+
+        if(year == 2016){
+            if(!state.equals("PR")){
+                String stateWeek = state + "," + week;
+                context.write(new Text(stateWeek), new IntWritable(deaths));
+            }
+        }
+    }
+  }
+
+  public static class DeathCountReducer extends Reducer<Text, IntWritable, Text, DoubleWritable> {
+    @Override
+    public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException{
+        // since there are many different causes of death, need to sum them up for each week
+        double sum = 0;
+        for(IntWritable val : values){
+            sum += val.get();
+        }
+        context.write(new Text(key.toString()), new DoubleWritable(sum));
+    }
+  }
+
   public static void main(String[] args) throws Exception {
     Configuration conf = new Configuration();
     Job job = Job.getInstance(conf, "Power");
@@ -197,6 +234,13 @@ public class App {
       job.setOutputKeyClass(Text.class);
       job.setOutputValueClass(DoubleWritable.class);
         break;
+      case "Death":
+      job.setMapperClass(DeathCountMapper.class);
+      job.setReducerClass(DeathCountReducer.class);
+      job.setMapOutputKeyClass(Text.class);
+      job.setMapOutputValueClass(IntWritable.class);
+      job.setOutputKeyClass(Text.class);
+      job.setOutputKeyClass(DoubleWritable.class);
       default:
         break;
     }
